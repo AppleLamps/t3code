@@ -40,6 +40,10 @@ type ProviderIntentEvent = Extract<
   }
 >;
 
+type SessionSettledEvent = Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+
+type ReactorEvent = ProviderIntentEvent | SessionSettledEvent;
+
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
@@ -509,7 +513,64 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
+  // ── Per-thread turn queue ─────────────────────────────────────────────
+  //
+  // Codex (and other providers) only support one active turn at a time per
+  // thread. When a `thread.turn-start-requested` event arrives while a turn
+  // is already running, we buffer it here and drain the next entry once the
+  // session transitions out of the "running" state.
+
+  const pendingTurnsByThread = new Map<
+    string,
+    Array<Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>>
+  >();
+  const runningThreads = new Set<string>();
+
+  const isThreadSessionRunning = Effect.fn("isThreadSessionRunning")(function* (
+    threadId: ThreadId,
+  ) {
+    if (runningThreads.has(threadId)) {
+      return true;
+    }
+    const thread = yield* resolveThread(threadId);
+    return (
+      thread?.session !== null &&
+      thread?.session !== undefined &&
+      (thread.session.status === "running" || thread.session.activeTurnId !== null)
+    );
+  });
+
+  const enqueuePendingTurn = (
+    event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+  ) => {
+    const threadId = event.payload.threadId;
+    const existing = pendingTurnsByThread.get(threadId);
+    if (existing) {
+      existing.push(event);
+    } else {
+      pendingTurnsByThread.set(threadId, [event]);
+    }
+  };
+
+  const drainNextPendingTurn = Effect.fn("drainNextPendingTurn")(function* (threadId: ThreadId) {
+    const queue = pendingTurnsByThread.get(threadId);
+    if (!queue || queue.length === 0) {
+      pendingTurnsByThread.delete(threadId);
+      return;
+    }
+    const next = queue.shift()!;
+    if (queue.length === 0) {
+      pendingTurnsByThread.delete(threadId);
+    }
+    yield* executeTurnStart(next);
+  });
+
+  const clearPendingTurns = (threadId: ThreadId) => {
+    pendingTurnsByThread.delete(threadId);
+    runningThreads.delete(threadId);
+  };
+
+  const executeTurnStart = Effect.fn("executeTurnStart")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
     const key = turnStartKeyForEvent(event);
@@ -565,6 +626,7 @@ const make = Effect.gen(function* () {
       }
     }
 
+    runningThreads.add(event.payload.threadId);
     yield* sendTurnForThread({
       threadId: event.payload.threadId,
       messageText: message.text,
@@ -575,17 +637,33 @@ const make = Effect.gen(function* () {
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
     }).pipe(
-      Effect.catchCause((cause) =>
-        appendProviderFailureActivity({
+      Effect.catchCause((cause) => {
+        runningThreads.delete(event.payload.threadId);
+        return appendProviderFailureActivity({
           threadId: event.payload.threadId,
           kind: "provider.turn.start.failed",
           summary: "Provider turn start failed",
           detail: Cause.pretty(cause),
           turnId: null,
           createdAt: event.payload.createdAt,
-        }),
-      ),
+        });
+      }),
     );
+  });
+
+  const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+  ) {
+    if (yield* isThreadSessionRunning(event.payload.threadId)) {
+      yield* Effect.logInfo("provider command reactor queueing turn start (turn already running)", {
+        threadId: event.payload.threadId,
+        commandId: event.commandId,
+        pendingCount: (pendingTurnsByThread.get(event.payload.threadId)?.length ?? 0) + 1,
+      });
+      enqueuePendingTurn(event);
+      return;
+    }
+    yield* executeTurnStart(event);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -711,6 +789,8 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    clearPendingTurns(event.payload.threadId);
+
     const now = event.payload.createdAt;
     if (thread.session && thread.session.status !== "stopped") {
       yield* providerService.stopSession({ threadId: thread.id });
@@ -731,9 +811,32 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const processDomainEvent = Effect.fn("processDomainEvent")(function* (
-    event: ProviderIntentEvent,
+  const processSessionSettled = Effect.fn("processSessionSettled")(function* (
+    event: SessionSettledEvent,
   ) {
+    const threadId = event.payload.threadId;
+    const status = event.payload.session.status;
+    const activeTurnId = event.payload.session.activeTurnId;
+
+    // A thread is still actively running if the session says "running" or has
+    // an active turn id. Only drain the queue once both are cleared.
+    if (status === "running" || activeTurnId !== null) {
+      return;
+    }
+
+    runningThreads.delete(threadId);
+
+    if (pendingTurnsByThread.has(threadId)) {
+      yield* Effect.logInfo("provider command reactor draining next queued turn", {
+        threadId,
+        sessionStatus: status,
+        pendingCount: pendingTurnsByThread.get(threadId)?.length ?? 0,
+      });
+      yield* drainNextPendingTurn(threadId);
+    }
+  });
+
+  const processDomainEvent = Effect.fn("processDomainEvent")(function* (event: ReactorEvent) {
     yield* Effect.annotateCurrentSpan({
       "orchestration.event_type": event.type,
       "orchestration.thread_id": event.payload.threadId,
@@ -771,10 +874,13 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.session-set":
+        yield* processSessionSettled(event);
+        return;
     }
   });
 
-  const processDomainEventSafely = (event: ProviderIntentEvent) =>
+  const processDomainEventSafely = (event: ReactorEvent) =>
     processDomainEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -797,7 +903,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.session-set"
       ) {
         return yield* worker.enqueue(event);
       }

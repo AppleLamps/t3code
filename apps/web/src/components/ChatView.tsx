@@ -4,6 +4,7 @@ import {
   type ClaudeCodeEffort,
   type MessageId,
   type ModelSelection,
+  type NativeApi,
   type ProjectScript,
   type ProviderKind,
   type ProjectEntry,
@@ -199,6 +200,31 @@ import {
   useServerConfig,
   useServerKeybindings,
 } from "~/rpc/serverState";
+
+/**
+ * Perform the terminal close API sequence: clear if final terminal, then close
+ * with history deletion. Falls back to writing "exit\n" if close is unavailable.
+ */
+function performTerminalClose(
+  api: NativeApi,
+  threadId: string,
+  terminalId: string,
+  isFinalTerminal: boolean,
+): void {
+  const fallbackExitWrite = () =>
+    api.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
+
+  if ("close" in api.terminal && typeof api.terminal.close === "function") {
+    void (async () => {
+      if (isFinalTerminal) {
+        await api.terminal.clear({ threadId, terminalId }).catch(() => undefined);
+      }
+      await api.terminal.close({ threadId, terminalId, deleteHistory: true });
+    })().catch(() => fallbackExitWrite());
+  } else {
+    void fallbackExitWrite();
+  }
+}
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -497,25 +523,7 @@ function PersistentThreadTerminalDrawer({
     (terminalId: string) => {
       const api = readNativeApi();
       if (!api) return;
-      const isFinalTerminal = terminalState.terminalIds.length <= 1;
-      const fallbackExitWrite = () =>
-        api.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
-
-      if ("close" in api.terminal && typeof api.terminal.close === "function") {
-        void (async () => {
-          if (isFinalTerminal) {
-            await api.terminal.clear({ threadId, terminalId }).catch(() => undefined);
-          }
-          await api.terminal.close({
-            threadId,
-            terminalId,
-            deleteHistory: true,
-          });
-        })().catch(() => fallbackExitWrite());
-      } else {
-        void fallbackExitWrite();
-      }
-
+      performTerminalClose(api, threadId, terminalId, terminalState.terminalIds.length <= 1);
       storeCloseTerminal(threadId, terminalId);
       bumpFocusRequestId();
     },
@@ -1684,27 +1692,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (terminalId: string) => {
       const api = readNativeApi();
       if (!activeThreadId || !api) return;
-      const isFinalTerminal = terminalState.terminalIds.length <= 1;
-      const fallbackExitWrite = () =>
-        api.terminal
-          .write({ threadId: activeThreadId, terminalId, data: "exit\n" })
-          .catch(() => undefined);
-      if ("close" in api.terminal && typeof api.terminal.close === "function") {
-        void (async () => {
-          if (isFinalTerminal) {
-            await api.terminal
-              .clear({ threadId: activeThreadId, terminalId })
-              .catch(() => undefined);
-          }
-          await api.terminal.close({
-            threadId: activeThreadId,
-            terminalId,
-            deleteHistory: true,
-          });
-        })().catch(() => fallbackExitWrite());
-      } else {
-        void fallbackExitWrite();
-      }
+      performTerminalClose(api, activeThreadId, terminalId, terminalState.terminalIds.length <= 1);
       storeCloseTerminal(activeThreadId, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
     },

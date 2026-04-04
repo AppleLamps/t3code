@@ -5,10 +5,12 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   PlusIcon,
+  SearchIcon,
   SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -719,6 +721,10 @@ export default function Sidebar() {
   const suppressProjectClickAfterDragRef = useRef(false);
   const suppressProjectClickForContextMenuRef = useRef(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
+  const [threadSearchQuery, setThreadSearchQuery] = useState("");
+  const threadSearchQueryLower = threadSearchQuery.toLowerCase();
+  const isSearching = threadSearchQuery.length > 0;
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -1391,62 +1397,69 @@ export default function Sidebar() {
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const renderedProjects = useMemo(
     () =>
-      sortedProjects.map((project) => {
-        const resolveProjectThreadStatus = (thread: (typeof visibleThreads)[number]) =>
-          resolveThreadStatusPill({
-            thread: {
-              ...thread,
-              lastVisitedAt: threadLastVisitedAtById[thread.id],
-            },
+      sortedProjects
+        .map((project) => {
+          const resolveProjectThreadStatus = (thread: (typeof visibleThreads)[number]) =>
+            resolveThreadStatusPill({
+              thread: {
+                ...thread,
+                lastVisitedAt: threadLastVisitedAtById[thread.id],
+              },
+            });
+          const projectThreads = sortThreadsForSidebar(
+            (threadIdsByProjectId[project.id] ?? [])
+              .map((threadId) => sidebarThreadsById[threadId])
+              .filter((thread): thread is NonNullable<typeof thread> => thread !== undefined)
+              .filter((thread) => thread.archivedAt === null)
+              .filter(
+                (thread) =>
+                  !isSearching || thread.title.toLowerCase().includes(threadSearchQueryLower),
+              ),
+            appSettings.sidebarThreadSortOrder,
+          );
+          const projectStatus = resolveProjectStatusIndicator(
+            projectThreads.map((thread) => resolveProjectThreadStatus(thread)),
+          );
+          const activeThreadId = routeThreadId ?? undefined;
+          const isThreadListExpanded = isSearching || expandedThreadListsByProject.has(project.id);
+          const pinnedCollapsedThread =
+            !project.expanded && activeThreadId
+              ? (projectThreads.find((thread) => thread.id === activeThreadId) ?? null)
+              : null;
+          const shouldShowThreadPanel =
+            isSearching || project.expanded || pinnedCollapsedThread !== null;
+          const {
+            hasHiddenThreads,
+            hiddenThreads,
+            visibleThreads: visibleProjectThreads,
+          } = getVisibleThreadsForProject({
+            threads: projectThreads,
+            activeThreadId,
+            isThreadListExpanded,
+            previewLimit: isSearching ? Infinity : THREAD_PREVIEW_LIMIT,
           });
-        const projectThreads = sortThreadsForSidebar(
-          (threadIdsByProjectId[project.id] ?? [])
-            .map((threadId) => sidebarThreadsById[threadId])
-            .filter((thread): thread is NonNullable<typeof thread> => thread !== undefined)
-            .filter((thread) => thread.archivedAt === null),
-          appSettings.sidebarThreadSortOrder,
-        );
-        const projectStatus = resolveProjectStatusIndicator(
-          projectThreads.map((thread) => resolveProjectThreadStatus(thread)),
-        );
-        const activeThreadId = routeThreadId ?? undefined;
-        const isThreadListExpanded = expandedThreadListsByProject.has(project.id);
-        const pinnedCollapsedThread =
-          !project.expanded && activeThreadId
-            ? (projectThreads.find((thread) => thread.id === activeThreadId) ?? null)
-            : null;
-        const shouldShowThreadPanel = project.expanded || pinnedCollapsedThread !== null;
-        const {
-          hasHiddenThreads,
-          hiddenThreads,
-          visibleThreads: visibleProjectThreads,
-        } = getVisibleThreadsForProject({
-          threads: projectThreads,
-          activeThreadId,
-          isThreadListExpanded,
-          previewLimit: THREAD_PREVIEW_LIMIT,
-        });
-        const hiddenThreadStatus = resolveProjectStatusIndicator(
-          hiddenThreads.map((thread) => resolveProjectThreadStatus(thread)),
-        );
-        const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
-        const renderedThreadIds = pinnedCollapsedThread
-          ? [pinnedCollapsedThread.id]
-          : visibleProjectThreads.map((thread) => thread.id);
-        const showEmptyThreadState = project.expanded && projectThreads.length === 0;
+          const hiddenThreadStatus = resolveProjectStatusIndicator(
+            hiddenThreads.map((thread) => resolveProjectThreadStatus(thread)),
+          );
+          const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
+          const renderedThreadIds = pinnedCollapsedThread
+            ? [pinnedCollapsedThread.id]
+            : visibleProjectThreads.map((thread) => thread.id);
+          const showEmptyThreadState = project.expanded && projectThreads.length === 0;
 
-        return {
-          hasHiddenThreads,
-          hiddenThreadStatus,
-          orderedProjectThreadIds,
-          project,
-          projectStatus,
-          renderedThreadIds,
-          showEmptyThreadState,
-          shouldShowThreadPanel,
-          isThreadListExpanded,
-        };
-      }),
+          return {
+            hasHiddenThreads,
+            hiddenThreadStatus,
+            orderedProjectThreadIds,
+            project,
+            projectStatus,
+            renderedThreadIds,
+            showEmptyThreadState,
+            shouldShowThreadPanel,
+            isThreadListExpanded,
+          };
+        })
+        .filter((renderedProject) => !isSearching || renderedProject.renderedThreadIds.length > 0),
     [
       appSettings.sidebarThreadSortOrder,
       expandedThreadListsByProject,
@@ -1455,6 +1468,8 @@ export default function Sidebar() {
       sidebarThreadsById,
       threadIdsByProjectId,
       threadLastVisitedAtById,
+      isSearching,
+      threadSearchQueryLower,
     ],
   );
   const visibleSidebarThreadIds = useMemo(
@@ -2038,6 +2053,34 @@ export default function Sidebar() {
                   Projects
                 </span>
                 <div className="flex items-center gap-1">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Search threads"
+                          className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                          onClick={() => {
+                            if (isSearching) {
+                              setThreadSearchQuery("");
+                            } else {
+                              // Focus input on next tick after state update causes render
+                              requestAnimationFrame(() => searchInputRef.current?.focus());
+                            }
+                          }}
+                        />
+                      }
+                    >
+                      {isSearching ? (
+                        <XIcon className="size-3.5" />
+                      ) : (
+                        <SearchIcon className="size-3.5" />
+                      )}
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">
+                      {isSearching ? "Clear search" : "Search threads"}
+                    </TooltipPopup>
+                  </Tooltip>
                   <ProjectSortMenu
                     projectSortOrder={appSettings.sidebarProjectSortOrder}
                     threadSortOrder={appSettings.sidebarThreadSortOrder}
@@ -2074,6 +2117,37 @@ export default function Sidebar() {
                   </Tooltip>
                 </div>
               </div>
+              {isSearching && (
+                <div className="relative mb-1.5 px-1">
+                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/50" />
+                  <input
+                    ref={searchInputRef}
+                    className="w-full rounded-md border border-border bg-secondary py-1 pl-7 pr-7 text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-ring focus:outline-none"
+                    placeholder="Filter threads…"
+                    value={threadSearchQuery}
+                    onChange={(event) => setThreadSearchQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        setThreadSearchQuery("");
+                      }
+                    }}
+                    autoFocus
+                  />
+                  {threadSearchQuery.length > 0 && (
+                    <button
+                      type="button"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground"
+                      onClick={() => {
+                        setThreadSearchQuery("");
+                        searchInputRef.current?.focus();
+                      }}
+                      aria-label="Clear search"
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  )}
+                </div>
+              )}
               {shouldShowProjectPathEntry && (
                 <div className="mb-2 px-1">
                   {isElectron && (
@@ -2165,6 +2239,11 @@ export default function Sidebar() {
               {projects.length === 0 && !shouldShowProjectPathEntry && (
                 <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
                   No projects yet
+                </div>
+              )}
+              {isSearching && renderedProjects.length === 0 && projects.length > 0 && (
+                <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
+                  No threads match &ldquo;{threadSearchQuery}&rdquo;
                 </div>
               )}
             </SidebarGroup>

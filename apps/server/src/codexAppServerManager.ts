@@ -502,21 +502,29 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.writeMessage(context, { method: "initialized" });
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
+        await Effect.logInfo("codex model/list response", { response: modelListResponse }).pipe(
+          this.runPromise,
+        );
       } catch (error) {
-        console.log("codex model/list failed", error);
+        await Effect.logWarning("codex model/list failed", { error: String(error) }).pipe(
+          this.runPromise,
+        );
       }
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
+        await Effect.logInfo("codex account/read response", {
+          response: accountReadResponse,
+        }).pipe(this.runPromise);
         context.account = readCodexAccountSnapshot(accountReadResponse);
-        console.log("codex subscription status", {
+        await Effect.logInfo("codex subscription status", {
           type: context.account.type,
           planType: context.account.planType,
           sparkEnabled: context.account.sparkEnabled,
-        });
+        }).pipe(this.runPromise);
       } catch (error) {
-        console.log("codex account/read failed", error);
+        await Effect.logWarning("codex account/read failed", { error: String(error) }).pipe(
+          this.runPromise,
+        );
       }
 
       const normalizedModel = resolveCodexModelForAccount(
@@ -905,6 +913,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context.pendingApprovals.clear();
     context.pendingUserInputs.clear();
 
+    context.output.removeAllListeners();
+    context.child.stderr.removeAllListeners();
+    context.child.removeAllListeners();
     context.output.close();
 
     if (!context.child.killed) {
