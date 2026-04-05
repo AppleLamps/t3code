@@ -16,17 +16,43 @@ function emitChange() {
   for (const listener of listeners) listener();
 }
 
+function logThemeWarning(message: string, error: unknown) {
+  console.warn(message, error instanceof Error ? error.message : error);
+}
+
+function getMediaQueryList(): MediaQueryList | null {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return null;
+  }
+
+  try {
+    return window.matchMedia(MEDIA_QUERY);
+  } catch (error) {
+    logThemeWarning("[THEME] Unable to read system theme preference.", error);
+    return null;
+  }
+}
+
 function getSystemDark(): boolean {
-  return window.matchMedia(MEDIA_QUERY).matches;
+  return getMediaQueryList()?.matches ?? false;
 }
 
 function getStored(): Theme {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw === "light" || raw === "dark" || raw === "system") return raw;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw === "light" || raw === "dark" || raw === "system") return raw;
+  } catch (error) {
+    logThemeWarning("[THEME] Unable to read stored theme preference.", error);
+  }
+
   return "system";
 }
 
 function applyTheme(theme: Theme, suppressTransitions = false) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
   if (suppressTransitions) {
     document.documentElement.classList.add("no-transitions");
   }
@@ -37,13 +63,21 @@ function applyTheme(theme: Theme, suppressTransitions = false) {
     // Force a reflow so the no-transitions class takes effect before removal
     // oxlint-disable-next-line no-unused-expressions
     document.documentElement.offsetHeight;
-    requestAnimationFrame(() => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        document.documentElement.classList.remove("no-transitions");
+      });
+    } else {
       document.documentElement.classList.remove("no-transitions");
-    });
+    }
   }
 }
 
 function syncDesktopTheme(theme: Theme) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   const bridge = window.desktopBridge;
   if (!bridge || lastDesktopTheme === theme) {
     return;
@@ -58,7 +92,9 @@ function syncDesktopTheme(theme: Theme) {
 }
 
 // Apply immediately on module load to prevent flash
-applyTheme(getStored());
+if (typeof window !== "undefined") {
+  applyTheme(getStored());
+}
 
 function getSnapshot(): ThemeSnapshot {
   const theme = getStored();
@@ -76,12 +112,12 @@ function subscribe(listener: () => void): () => void {
   listeners.push(listener);
 
   // Listen for system preference changes
-  const mq = window.matchMedia(MEDIA_QUERY);
+  const mq = getMediaQueryList();
   const handleChange = () => {
     if (getStored() === "system") applyTheme("system", true);
     emitChange();
   };
-  mq.addEventListener("change", handleChange);
+  mq?.addEventListener("change", handleChange);
 
   // Listen for storage changes from other tabs
   const handleStorage = (e: StorageEvent) => {
@@ -90,12 +126,16 @@ function subscribe(listener: () => void): () => void {
       emitChange();
     }
   };
-  window.addEventListener("storage", handleStorage);
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", handleStorage);
+  }
 
   return () => {
     listeners = listeners.filter((l) => l !== listener);
-    mq.removeEventListener("change", handleChange);
-    window.removeEventListener("storage", handleStorage);
+    mq?.removeEventListener("change", handleChange);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("storage", handleStorage);
+    }
   };
 }
 
@@ -107,7 +147,11 @@ export function useTheme() {
     theme === "system" ? (snapshot.systemDark ? "dark" : "light") : theme;
 
   const setTheme = useCallback((next: Theme) => {
-    localStorage.setItem(STORAGE_KEY, next);
+    try {
+      localStorage.setItem(STORAGE_KEY, next);
+    } catch (error) {
+      logThemeWarning("[THEME] Unable to persist theme preference.", error);
+    }
     applyTheme(next, true);
     emitChange();
   }, []);
