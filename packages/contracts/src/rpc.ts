@@ -4,6 +4,11 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { OpenError, OpenInEditorInput } from "./editor";
 import {
+  FilesystemListDirectoryError,
+  FilesystemListDirectoryInput,
+  FilesystemListDirectoryResult,
+} from "./filesystem";
+import {
   GitActionProgressEvent,
   GitCheckoutInput,
   GitCommandError,
@@ -80,6 +85,9 @@ export const WS_METHODS = {
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
+
+  // Filesystem methods
+  filesystemListDirectory: "filesystem.listDirectory",
 
   // Git methods
   gitPull: "git.pull",
@@ -160,6 +168,12 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: OpenInEditorInput,
   error: OpenError,
+});
+
+export const WsFilesystemListDirectoryRpc = Rpc.make(WS_METHODS.filesystemListDirectory, {
+  payload: FilesystemListDirectoryInput,
+  success: FilesystemListDirectoryResult,
+  error: FilesystemListDirectoryError,
 });
 
 export const WsGitStatusRpc = Rpc.make(WS_METHODS.gitStatus, {
@@ -330,6 +344,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsShellOpenInEditorRpc,
+  WsFilesystemListDirectoryRpc,
   WsGitStatusRpc,
   WsGitPullRpc,
   WsGitRunStackedActionRpc,

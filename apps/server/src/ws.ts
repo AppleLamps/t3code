@@ -1,7 +1,11 @@
 import { Effect, Layer, Option, Queue, Ref, Schema, Stream } from "effect";
+import * as fsPromises from "node:fs/promises";
+import * as nodePath from "node:path";
+import * as os from "node:os";
 import {
   type GitActionProgressEvent,
   type GitManagerServiceError,
+  FilesystemListDirectoryError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   OrchestrationGetFullThreadDiffError,
@@ -41,6 +45,61 @@ import { TerminalManager } from "./terminal/Services/Manager";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths";
+
+const listDirectoryEffect = (rawPath: string) =>
+  Effect.tryPromise({
+    try: async () => {
+      const trimmedPath = rawPath.trim();
+
+      // On Windows, an empty path shows available drive letters instead of homedir
+      if (process.platform === "win32" && trimmedPath === "") {
+        const drives: Array<{ name: string; path: string; isDirectory: boolean }> = [];
+        for (let charCode = 65; charCode <= 90; charCode += 1) {
+          const driveLetter = String.fromCharCode(charCode);
+          const drivePath = `${driveLetter}:\\`;
+          try {
+            await fsPromises.access(drivePath);
+            drives.push({ name: `${driveLetter}:`, path: drivePath, isDirectory: true });
+          } catch {
+            // Drive not available
+          }
+        }
+        return { entries: drives, currentPath: "", parentPath: null };
+      }
+
+      const resolvedPath = trimmedPath || os.homedir();
+      const absolutePath = nodePath.resolve(resolvedPath);
+      const dirents = await fsPromises.readdir(absolutePath, { withFileTypes: true });
+      const entries = dirents
+        .filter((d) => d.isDirectory() || d.isFile())
+        .toSorted((a, b) => {
+          // Directories first, then files, alphabetical within each group
+          if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        })
+        .map((d) => ({
+          name: d.name,
+          path: nodePath.join(absolutePath, d.name),
+          isDirectory: d.isDirectory(),
+        }));
+
+      const parsed = nodePath.parse(absolutePath);
+      // On Windows, navigating up from a drive root goes to the drives list
+      const parentPath =
+        absolutePath === parsed.root
+          ? process.platform === "win32"
+            ? ""
+            : null
+          : nodePath.dirname(absolutePath);
+
+      return { entries, currentPath: absolutePath, parentPath };
+    },
+    catch: (error) =>
+      new FilesystemListDirectoryError({
+        message: error instanceof Error ? error.message : "Failed to list directory",
+        cause: error,
+      }),
+  });
 
 const WsRpcLayer = WsRpcGroup.toLayer(
   Effect.gen(function* () {
@@ -296,6 +355,10 @@ const WsRpcLayer = WsRpcGroup.toLayer(
       [WS_METHODS.shellOpenInEditor]: (input) =>
         observeRpcEffect(WS_METHODS.shellOpenInEditor, open.openInEditor(input), {
           "rpc.aggregate": "workspace",
+        }),
+      [WS_METHODS.filesystemListDirectory]: (input) =>
+        observeRpcEffect(WS_METHODS.filesystemListDirectory, listDirectoryEffect(input.path), {
+          "rpc.aggregate": "filesystem",
         }),
       [WS_METHODS.gitStatus]: (input) =>
         observeRpcEffect(WS_METHODS.gitStatus, gitManager.status(input), {

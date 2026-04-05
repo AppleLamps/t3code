@@ -93,12 +93,12 @@ bun run test     # Run all tests (vitest via turbo) — do NOT use `bun test`
 
 ## Architecture
 
-| Package | Role |
-|---------|------|
-| `apps/server` | Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, manages provider sessions. |
-| `apps/web` | React/Vite UI. Session UX, conversation/event rendering, client-side state via Zustand. |
-| `packages/contracts` | Shared Effect/Schema schemas and TypeScript contracts. Schema-only — no runtime logic. |
-| `packages/shared` | Shared runtime utilities. Explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index. |
+| Package              | Role                                                                                                                         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server`        | Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, manages provider sessions. |
+| `apps/web`           | React/Vite UI. Session UX, conversation/event rendering, client-side state via Zustand.                                      |
+| `packages/contracts` | Shared Effect/Schema schemas and TypeScript contracts. Schema-only — no runtime logic.                                       |
+| `packages/shared`    | Shared runtime utilities. Explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.                           |
 
 ## Some notes
 

@@ -13,8 +13,10 @@ import {
   XIcon,
 } from "lucide-react";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { FolderPickerDialog } from "./FolderPickerDialog";
 import { autoAnimate } from "@formkit/auto-animate";
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -256,17 +258,18 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
 interface SidebarThreadRowProps {
   threadId: ThreadId;
   orderedProjectThreadIds: readonly ThreadId[];
-  routeThreadId: ThreadId | null;
-  selectedThreadIds: ReadonlySet<ThreadId>;
+  isActive: boolean;
+  isSelected: boolean;
+  hasSelection: boolean;
   showThreadJumpHints: boolean;
   jumpLabel: string | null;
   appSettingsConfirmThreadArchive: boolean;
-  renamingThreadId: ThreadId | null;
+  isRenaming: boolean;
   renamingTitle: string;
   setRenamingTitle: (title: string) => void;
   renamingInputRef: MutableRefObject<HTMLInputElement | null>;
   renamingCommittedRef: MutableRefObject<boolean>;
-  confirmingArchiveThreadId: ThreadId | null;
+  isConfirmingArchive: boolean;
   setConfirmingArchiveThreadId: Dispatch<SetStateAction<ThreadId | null>>;
   confirmArchiveButtonRefs: MutableRefObject<Map<ThreadId, HTMLButtonElement>>;
   handleThreadClick: (
@@ -288,7 +291,7 @@ interface SidebarThreadRowProps {
   pr: ThreadPr | null;
 }
 
-function SidebarThreadRow(props: SidebarThreadRowProps) {
+const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const thread = useSidebarThreadSummaryById(props.threadId);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[props.threadId]);
   const runningTerminalIds = useTerminalStateStore(
@@ -300,8 +303,8 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
     return null;
   }
 
-  const isActive = props.routeThreadId === thread.id;
-  const isSelected = props.selectedThreadIds.has(thread.id);
+  const isActive = props.isActive;
+  const isSelected = props.isSelected;
   const isHighlighted = isActive || isSelected;
   const isThreadRunning =
     thread.session?.status === "running" && thread.session.activeTurnId != null;
@@ -313,7 +316,7 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
   });
   const prStatus = prStatusIndicator(props.pr);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
-  const isConfirmingArchive = props.confirmingArchiveThreadId === thread.id && !isThreadRunning;
+  const isConfirmingArchive = props.isConfirmingArchive && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
     ? "pointer-events-none opacity-0"
     : !isThreadRunning
@@ -356,13 +359,13 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
         }}
         onContextMenu={(event) => {
           event.preventDefault();
-          if (props.selectedThreadIds.size > 0 && props.selectedThreadIds.has(thread.id)) {
+          if (props.hasSelection && props.isSelected) {
             void props.handleMultiSelectContextMenu({
               x: event.clientX,
               y: event.clientY,
             });
           } else {
-            if (props.selectedThreadIds.size > 0) {
+            if (props.hasSelection) {
               props.clearSelection();
             }
             void props.handleThreadContextMenu(thread.id, {
@@ -393,7 +396,7 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
             </Tooltip>
           )}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
-          {props.renamingThreadId === thread.id ? (
+          {props.isRenaming ? (
             <input
               ref={(element) => {
                 if (element && props.renamingInputRef.current !== element) {
@@ -546,7 +549,7 @@ function SidebarThreadRow(props: SidebarThreadRowProps) {
       </SidebarMenuSubButton>
     </SidebarMenuSubItem>
   );
-}
+});
 
 function T3Wordmark() {
   return (
@@ -713,6 +716,7 @@ export default function Sidebar() {
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const [confirmingArchiveThreadId, setConfirmingArchiveThreadId] = useState<ThreadId | null>(null);
@@ -976,7 +980,15 @@ export default function Sidebar() {
       void handlePickFolder();
       return;
     }
+    if (!isElectron) {
+      setFolderPickerOpen(true);
+      return;
+    }
     setAddingProject((prev) => !prev);
+  };
+
+  const handleFolderPickerSelect = (path: string) => {
+    void addProjectFromPath(path);
   };
 
   const cancelRename = useCallback(() => {
@@ -1740,17 +1752,18 @@ export default function Sidebar() {
                 key={threadId}
                 threadId={threadId}
                 orderedProjectThreadIds={orderedProjectThreadIds}
-                routeThreadId={routeThreadId}
-                selectedThreadIds={selectedThreadIds}
+                isActive={routeThreadId === threadId}
+                isSelected={selectedThreadIds.has(threadId)}
+                hasSelection={selectedThreadIds.size > 0}
                 showThreadJumpHints={showThreadJumpHints}
                 jumpLabel={threadJumpLabelById.get(threadId) ?? null}
                 appSettingsConfirmThreadArchive={appSettings.confirmThreadArchive}
-                renamingThreadId={renamingThreadId}
-                renamingTitle={renamingTitle}
+                isRenaming={renamingThreadId === threadId}
+                renamingTitle={renamingThreadId === threadId ? renamingTitle : ""}
                 setRenamingTitle={setRenamingTitle}
                 renamingInputRef={renamingInputRef}
                 renamingCommittedRef={renamingCommittedRef}
-                confirmingArchiveThreadId={confirmingArchiveThreadId}
+                isConfirmingArchive={confirmingArchiveThreadId === threadId}
                 setConfirmingArchiveThreadId={setConfirmingArchiveThreadId}
                 confirmArchiveButtonRefs={confirmArchiveButtonRefs}
                 handleThreadClick={handleThreadClick}
@@ -2271,6 +2284,11 @@ export default function Sidebar() {
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarFooter>
+          <FolderPickerDialog
+            open={folderPickerOpen}
+            onOpenChange={setFolderPickerOpen}
+            onSelect={handleFolderPickerSelect}
+          />
         </>
       )}
     </>
