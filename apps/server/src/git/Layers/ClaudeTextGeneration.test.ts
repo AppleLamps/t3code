@@ -1,13 +1,16 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
-import { expect } from "vitest";
+import { describe, expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { sanitizeThreadTitle } from "../Utils.ts";
 import { ClaudeTextGenerationLive } from "./ClaudeTextGeneration.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+
+// Tests create fake Claude CLI binaries as POSIX shell scripts (#!/bin/sh).
+const isWindows = process.platform === "win32";
 
 const ClaudeTextGenerationTestLayer = ClaudeTextGenerationLive.pipe(
   Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -177,133 +180,135 @@ function withFakeClaudeEnv<A, E, R>(
   );
 }
 
-it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGenerationLive", (it) => {
-  it.effect("forwards Claude thinking settings for Haiku without passing effort", () =>
-    withFakeClaudeEnv(
-      {
-        output: JSON.stringify({
-          structured_output: {
-            subject: "Add important change",
-            body: "",
-          },
-        }),
-        argsMustContain: '--settings {"alwaysThinkingEnabled":false}',
-        argsMustNotContain: "--effort",
-      },
-      Effect.gen(function* () {
-        const textGeneration = yield* TextGeneration;
-
-        const generated = yield* textGeneration.generateCommitMessage({
-          cwd: process.cwd(),
-          branch: "feature/claude-effect",
-          stagedSummary: "M README.md",
-          stagedPatch: "diff --git a/README.md b/README.md",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-haiku-4-5",
-            options: {
-              thinking: false,
-              effort: "high",
+describe.skipIf(isWindows)("ClaudeTextGenerationLive", () => {
+  it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGenerationLive", (it) => {
+    it.effect("forwards Claude thinking settings for Haiku without passing effort", () =>
+      withFakeClaudeEnv(
+        {
+          output: JSON.stringify({
+            structured_output: {
+              subject: "Add important change",
+              body: "",
             },
-          },
-        });
+          }),
+          argsMustContain: '--settings {"alwaysThinkingEnabled":false}',
+          argsMustNotContain: "--effort",
+        },
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
 
-        expect(generated.subject).toBe("Add important change");
-      }),
-    ),
-  );
-
-  it.effect("forwards Claude fast mode and supported effort", () =>
-    withFakeClaudeEnv(
-      {
-        output: JSON.stringify({
-          structured_output: {
-            title: "Improve orchestration flow",
-            body: "Body",
-          },
-        }),
-        argsMustContain: '--effort max --settings {"fastMode":true}',
-      },
-      Effect.gen(function* () {
-        const textGeneration = yield* TextGeneration;
-
-        const generated = yield* textGeneration.generatePrContent({
-          cwd: process.cwd(),
-          baseBranch: "main",
-          headBranch: "feature/claude-effect",
-          commitSummary: "Improve orchestration",
-          diffSummary: "1 file changed",
-          diffPatch: "diff --git a/README.md b/README.md",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-opus-4-6",
-            options: {
-              effort: "max",
-              fastMode: true,
+          const generated = yield* textGeneration.generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/claude-effect",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff --git a/README.md b/README.md",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "claude-haiku-4-5",
+              options: {
+                thinking: false,
+                effort: "high",
+              },
             },
-          },
-        });
+          });
 
-        expect(generated.title).toBe("Improve orchestration flow");
-      }),
-    ),
-  );
-
-  it.effect("generates thread titles through the Claude provider", () =>
-    withFakeClaudeEnv(
-      {
-        output: JSON.stringify({
-          structured_output: {
-            title:
-              '  "Reconnect failures after restart because the session state does not recover"  ',
-          },
+          expect(generated.subject).toBe("Add important change");
         }),
-        stdinMustContain: "You write concise thread titles for coding conversations.",
-      },
-      Effect.gen(function* () {
-        const textGeneration = yield* TextGeneration;
+      ),
+    );
 
-        const generated = yield* textGeneration.generateThreadTitle({
-          cwd: process.cwd(),
-          message: "Please investigate reconnect failures after restarting the session.",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-sonnet-4-6",
-          },
-        });
+    it.effect("forwards Claude fast mode and supported effort", () =>
+      withFakeClaudeEnv(
+        {
+          output: JSON.stringify({
+            structured_output: {
+              title: "Improve orchestration flow",
+              body: "Body",
+            },
+          }),
+          argsMustContain: '--effort max --settings {"fastMode":true}',
+        },
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
 
-        expect(generated.title).toBe(
-          sanitizeThreadTitle(
-            '"Reconnect failures after restart because the session state does not recover"',
-          ),
-        );
-      }),
-    ),
-  );
+          const generated = yield* textGeneration.generatePrContent({
+            cwd: process.cwd(),
+            baseBranch: "main",
+            headBranch: "feature/claude-effect",
+            commitSummary: "Improve orchestration",
+            diffSummary: "1 file changed",
+            diffPatch: "diff --git a/README.md b/README.md",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "claude-opus-4-6",
+              options: {
+                effort: "max",
+                fastMode: true,
+              },
+            },
+          });
 
-  it.effect("falls back when Claude thread title normalization becomes whitespace-only", () =>
-    withFakeClaudeEnv(
-      {
-        output: JSON.stringify({
-          structured_output: {
-            title: '  """   """  ',
-          },
+          expect(generated.title).toBe("Improve orchestration flow");
         }),
-      },
-      Effect.gen(function* () {
-        const textGeneration = yield* TextGeneration;
+      ),
+    );
 
-        const generated = yield* textGeneration.generateThreadTitle({
-          cwd: process.cwd(),
-          message: "Name this thread.",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-sonnet-4-6",
-          },
-        });
+    it.effect("generates thread titles through the Claude provider", () =>
+      withFakeClaudeEnv(
+        {
+          output: JSON.stringify({
+            structured_output: {
+              title:
+                '  "Reconnect failures after restart because the session state does not recover"  ',
+            },
+          }),
+          stdinMustContain: "You write concise thread titles for coding conversations.",
+        },
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
 
-        expect(generated.title).toBe("New thread");
-      }),
-    ),
-  );
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Please investigate reconnect failures after restarting the session.",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "claude-sonnet-4-6",
+            },
+          });
+
+          expect(generated.title).toBe(
+            sanitizeThreadTitle(
+              '"Reconnect failures after restart because the session state does not recover"',
+            ),
+          );
+        }),
+      ),
+    );
+
+    it.effect("falls back when Claude thread title normalization becomes whitespace-only", () =>
+      withFakeClaudeEnv(
+        {
+          output: JSON.stringify({
+            structured_output: {
+              title: '  """   """  ',
+            },
+          }),
+        },
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Name this thread.",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "claude-sonnet-4-6",
+            },
+          });
+
+          expect(generated.title).toBe("New thread");
+        }),
+      ),
+    );
+  });
 });

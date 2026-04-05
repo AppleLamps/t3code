@@ -1,4 +1,6 @@
+import * as NFS from "node:fs";
 import os from "node:os";
+import nodePath from "node:path";
 
 import { assert, expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, FileSystem, Layer, Option, Path } from "effect";
@@ -21,12 +23,13 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpServiceName: "t3-server",
   } as const;
 
+  // readBootstrapEnvelope takes fd ownership (autoClose: true), so we must
+  // NOT register a scoped close here — that would race with the stream's close.
   const openBootstrapFd = Effect.fn(function* (payload: Record<string, unknown>) {
     const fs = yield* FileSystem.FileSystem;
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
     yield* fs.writeFileString(filePath, `${JSON.stringify(payload)}\n`);
-    const { fd } = yield* fs.open(filePath, { flag: "r" });
-    return fd;
+    return NFS.openSync(filePath, "r");
   });
 
   it.effect("falls back to effect/config values when flags are omitted", () =>
@@ -156,7 +159,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
   it.effect("uses bootstrap envelope values as fallbacks when flags and env are absent", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
-      const baseDir = "/tmp/t3-bootstrap-home";
+      const baseDir = nodePath.resolve("/tmp/t3-bootstrap-home");
       const fd = yield* openBootstrapFd({
         mode: "desktop",
         port: 4888,

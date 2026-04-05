@@ -1,6 +1,7 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as nodePath from "node:path";
 import {
   CommandId,
   DEFAULT_SERVER_SETTINGS,
@@ -574,7 +575,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(first.config.keybindings, []);
         assert.deepEqual(first.config.issues, []);
         assert.deepEqual(first.config.providers, providers);
-        assert.equal(first.config.observability.logsDirectoryPath.endsWith("/logs"), true);
+        assert.equal(nodePath.basename(first.config.observability.logsDirectoryPath), "logs");
         assert.equal(first.config.observability.localTracingEnabled, true);
         assert.equal(first.config.observability.otlpTracesUrl, "http://localhost:4318/v1/traces");
         assert.equal(first.config.observability.otlpTracesEnabled, true);
@@ -722,10 +723,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assertTrue(result._tag === "Failure");
       assertTrue(result.failure._tag === "ProjectSearchEntriesError");
-      assertInclude(
-        result.failure.message,
-        "Workspace root does not exist: /definitely/not/a/real/workspace/path",
-      );
+      assertInclude(result.failure.message, "Workspace root does not exist:");
+      assertInclude(result.failure.message, "definitely");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

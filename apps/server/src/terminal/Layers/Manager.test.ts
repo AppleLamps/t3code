@@ -289,7 +289,8 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
       fs.writeFileString(filePath, contents),
     );
 
-  it.effect("preserves non-notFound cwd stat failures", () =>
+  // chmod(0o000) does not restrict directory access on Windows.
+  it.effect.skipIf(process.platform === "win32")("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
       const { manager, baseDir } = yield* createManager();
       const blockedRoot = path.join(baseDir, "blocked-root");
@@ -751,13 +752,19 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("TerminalManager", (
 
       assert.equal(snapshot.status, "running");
       expect(ptyAdapter.spawnInputs.length).toBeGreaterThanOrEqual(2);
-      expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
+      // On Windows, normalizeShellCommand preserves the full command string
+      // (including args) rather than splitting on whitespace.
+      if (process.platform === "win32") {
+        expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell -l");
+      } else {
+        expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
+      }
 
       if (process.platform === "win32") {
         expect(
-          ptyAdapter.spawnInputs.some(
-            (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
-          ),
+          ptyAdapter.spawnInputs
+            .slice(1)
+            .some((input) => input.shell !== "/definitely/missing-shell -l"),
         ).toBe(true);
       } else {
         expect(

@@ -1,4 +1,5 @@
 import * as NFS from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -12,6 +13,8 @@ import { vi } from "vitest";
 
 import { readBootstrapEnvelope, resolveFdPath } from "./bootstrap";
 import { assertNone, assertSome } from "@effect/vitest/utils";
+
+const isWindows = process.platform === "win32";
 
 const openSyncInterceptor = vi.hoisted(() => ({ failPath: null as string | null }));
 
@@ -58,10 +61,16 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
         })}\n`,
       );
 
-      const fd = yield* Effect.acquireRelease(
-        Effect.sync(() => NFS.openSync(filePath, "r")),
-        (fd) => Effect.sync(() => NFS.closeSync(fd)),
-      );
+      // On Unix, readBootstrapEnvelope duplicates the fd via /proc/self/fd or
+      // /dev/fd, so the original fd stays owned by this scope. On Windows,
+      // there is no fd path and the stream takes direct ownership (autoClose),
+      // so we must NOT register a close finalizer.
+      const fd = isWindows
+        ? NFS.openSync(filePath, "r")
+        : yield* Effect.acquireRelease(
+            Effect.sync(() => NFS.openSync(filePath, "r")),
+            (fd) => Effect.sync(() => NFS.closeSync(fd)),
+          );
 
       const payload = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, { timeoutMs: 100 });
       assertSome(payload, {
@@ -70,39 +79,46 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
     }),
   );
 
-  it.effect("falls back to reading the inherited fd when path duplication fails", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
-
-      yield* fs.writeFileString(
-        filePath,
-        `${yield* Schema.encodeEffect(Schema.fromJsonString(TestEnvelopeSchema))({
-          mode: "desktop",
-        })}\n`,
-      );
-
-      // Open without acquireRelease: the direct-stream fallback uses autoClose: true,
-      // so the stream owns the fd lifecycle and closes it asynchronously on end.
-      // Attempting to also close it synchronously in a finalizer races with the
-      // stream's async close and produces an uncaught EBADF.
-      const fd = NFS.openSync(filePath, "r");
-
-      openSyncInterceptor.failPath = `/proc/self/fd/${fd}`;
-      try {
-        const payload = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, { timeoutMs: 100 });
-        assertSome(payload, {
-          mode: "desktop",
+  // The direct-stream fallback path triggers an async fd close race on Windows
+  // that surfaces as an uncaught EBADF, poisoning subsequent tests.
+  it.effect.skipIf(isWindows)(
+    "falls back to reading the inherited fd when path duplication fails",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const filePath = yield* fs.makeTempFileScoped({
+          prefix: "t3-bootstrap-",
+          suffix: ".ndjson",
         });
-      } finally {
-        openSyncInterceptor.failPath = null;
-      }
-    }),
+
+        yield* fs.writeFileString(
+          filePath,
+          `${yield* Schema.encodeEffect(Schema.fromJsonString(TestEnvelopeSchema))({
+            mode: "desktop",
+          })}\n`,
+        );
+
+        // Open without acquireRelease: the direct-stream fallback uses autoClose: true,
+        // so the stream owns the fd lifecycle and closes it asynchronously on end.
+        // Attempting to also close it synchronously in a finalizer races with the
+        // stream's async close and produces an uncaught EBADF.
+        const fd = NFS.openSync(filePath, "r");
+
+        openSyncInterceptor.failPath = `/proc/self/fd/${fd}`;
+        try {
+          const payload = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, { timeoutMs: 100 });
+          assertSome(payload, {
+            mode: "desktop",
+          });
+        } finally {
+          openSyncInterceptor.failPath = null;
+        }
+      }),
   );
 
   it.effect("returns none when the fd is unavailable", () =>
     Effect.gen(function* () {
-      const fd = NFS.openSync("/dev/null", "r");
+      const fd = NFS.openSync(os.devNull, "r");
       NFS.closeSync(fd);
 
       const payload = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, { timeoutMs: 100 });
@@ -110,40 +126,43 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
     }),
   );
 
-  it.effect("returns none when the bootstrap read times out before any value arrives", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bootstrap-" });
-      const fifoPath = path.join(tempDir, "bootstrap.pipe");
+  // Requires mkfifo and sh (POSIX-only).
+  it.effect.skipIf(isWindows)(
+    "returns none when the bootstrap read times out before any value arrives",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bootstrap-" });
+        const fifoPath = path.join(tempDir, "bootstrap.pipe");
 
-      yield* Effect.sync(() => execFileSync("mkfifo", [fifoPath]));
+        yield* Effect.sync(() => execFileSync("mkfifo", [fifoPath]));
 
-      const _writer = yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          spawn("sh", ["-c", 'exec 3>"$1"; sleep 60', "sh", fifoPath], {
-            stdio: ["ignore", "ignore", "ignore"],
-          }),
-        ),
-        (writer) =>
-          Effect.sync(() => {
-            writer.kill("SIGKILL");
-          }),
-      );
+        const _writer = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            spawn("sh", ["-c", 'exec 3>"$1"; sleep 60', "sh", fifoPath], {
+              stdio: ["ignore", "ignore", "ignore"],
+            }),
+          ),
+          (writer) =>
+            Effect.sync(() => {
+              writer.kill("SIGKILL");
+            }),
+        );
 
-      const fd = yield* Effect.acquireRelease(
-        Effect.sync(() => NFS.openSync(fifoPath, "r")),
-        (fd) => Effect.sync(() => NFS.closeSync(fd)),
-      );
+        const fd = yield* Effect.acquireRelease(
+          Effect.sync(() => NFS.openSync(fifoPath, "r")),
+          (fd) => Effect.sync(() => NFS.closeSync(fd)),
+        );
 
-      const fiber = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, {
-        timeoutMs: 100,
-      }).pipe(Effect.forkScoped);
+        const fiber = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, {
+          timeoutMs: 100,
+        }).pipe(Effect.forkScoped);
 
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust(Duration.millis(100));
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(Duration.millis(100));
 
-      const payload = yield* Fiber.join(fiber);
-      assertNone(payload);
-    }).pipe(Effect.provide(TestClock.layer())),
+        const payload = yield* Fiber.join(fiber);
+        assertNone(payload);
+      }).pipe(Effect.provide(TestClock.layer())),
   );
 });
