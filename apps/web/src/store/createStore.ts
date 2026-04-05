@@ -1,0 +1,30 @@
+import {
+  type OrchestrationEvent,
+  type OrchestrationReadModel,
+  type ThreadId,
+} from "@t3tools/contracts";
+import { create } from "zustand";
+import { type AppState, initialState } from "./appState";
+import { syncServerReadModel } from "./actions";
+import { setError, setThreadBranch } from "./actions";
+import { applyOrchestrationEvent, applyOrchestrationEvents } from "./eventReducer";
+
+// ── Zustand store ────────────────────────────────────────────────────
+
+export interface AppStore extends AppState {
+  syncServerReadModel: (readModel: OrchestrationReadModel) => void;
+  applyOrchestrationEvent: (event: OrchestrationEvent) => void;
+  applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
+  setError: (threadId: ThreadId, error: string | null) => void;
+  setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
+}
+
+export const useStore = create<AppStore>((set) => ({
+  ...initialState,
+  syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
+  applyOrchestrationEvent: (event) => set((state) => applyOrchestrationEvent(state, event)),
+  applyOrchestrationEvents: (events) => set((state) => applyOrchestrationEvents(state, events)),
+  setError: (threadId, error) => set((state) => setError(state, threadId, error)),
+  setThreadBranch: (threadId, branch, worktreePath) =>
+    set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
+}));
