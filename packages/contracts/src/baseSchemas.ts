@@ -6,7 +6,16 @@ export const TrimmedNonEmptyString = TrimmedString.check(Schema.isNonEmpty());
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 
-export const IsoDateTime = Schema.String;
+/**
+ * ISO 8601 datetime string (e.g. `"2026-04-05T12:34:56.789Z"`).
+ *
+ * Validates the format at the schema level — rejects obviously malformed values
+ * while remaining permissive enough for all standard ISO 8601 datetime outputs
+ * (with or without milliseconds, with `Z` or `±HH:MM` offset).
+ */
+export const IsoDateTime = Schema.String.check(
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/),
+);
 export type IsoDateTime = typeof IsoDateTime.Type;
 
 /**
