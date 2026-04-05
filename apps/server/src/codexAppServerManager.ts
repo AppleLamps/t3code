@@ -1309,6 +1309,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     assertSupportedCodexCliVersion(input);
   }
 
+  /**
+   * Shallow-merge updates into the session object.
+   *
+   * Safe without locks: all callers (stdout line handler, stderr listener,
+   * child error/exit events) run on the Node.js event loop, so each handler
+   * completes before the next one starts — no concurrent read-modify-write.
+   */
   private updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void {
     context.session = {
       ...context.session,

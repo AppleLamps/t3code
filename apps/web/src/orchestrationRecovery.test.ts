@@ -130,4 +130,81 @@ describe("createOrchestrationRecoveryCoordinator", () => {
       },
     });
   });
+
+  it("ignores duplicate events with already-applied sequences", () => {
+    const coordinator = createOrchestrationRecoveryCoordinator();
+
+    coordinator.beginSnapshotRecovery("bootstrap");
+    coordinator.completeSnapshotRecovery(5);
+
+    expect(coordinator.classifyDomainEvent(3)).toBe("ignore");
+    expect(coordinator.classifyDomainEvent(5)).toBe("ignore");
+    expect(coordinator.getState().latestSequence).toBe(5);
+  });
+
+  it("markEventBatchApplied filters out already-applied sequences", () => {
+    const coordinator = createOrchestrationRecoveryCoordinator();
+
+    coordinator.beginSnapshotRecovery("bootstrap");
+    coordinator.completeSnapshotRecovery(3);
+
+    const applied = coordinator.markEventBatchApplied([
+      { sequence: 2 },
+      { sequence: 3 },
+      { sequence: 4 },
+      { sequence: 5 },
+    ]);
+    expect(applied).toEqual([{ sequence: 4 }, { sequence: 5 }]);
+    expect(coordinator.getState().latestSequence).toBe(5);
+  });
+
+  it("serializes concurrent recovery attempts — second snapshot deferred while first in flight", () => {
+    const coordinator = createOrchestrationRecoveryCoordinator();
+
+    expect(coordinator.beginSnapshotRecovery("bootstrap")).toBe(true);
+    expect(coordinator.beginSnapshotRecovery("bootstrap")).toBe(false);
+    expect(coordinator.getState().pendingReplay).toBe(true);
+  });
+
+  it("serializes concurrent recovery — replay deferred while snapshot in flight", () => {
+    const coordinator = createOrchestrationRecoveryCoordinator();
+
+    expect(coordinator.beginSnapshotRecovery("bootstrap")).toBe(true);
+    expect(coordinator.beginReplayRecovery("sequence-gap")).toBe(false);
+    expect(coordinator.getState().pendingReplay).toBe(true);
+  });
+
+  it("events arriving between replay start and complete trigger another replay", () => {
+    const coordinator = createOrchestrationRecoveryCoordinator();
+
+    coordinator.beginSnapshotRecovery("bootstrap");
+    coordinator.completeSnapshotRecovery(3);
+
+    // Gap detected, start replay
+    coordinator.classifyDomainEvent(5);
+    coordinator.beginReplayRecovery("sequence-gap");
+
+    // Replay fetches events 4-5
+    coordinator.markEventBatchApplied([{ sequence: 4 }, { sequence: 5 }]);
+
+    // Meanwhile, event 8 arrived (deferred during replay)
+    coordinator.classifyDomainEvent(8);
+
+    // Replay completes — should request another replay since events arrived
+    expect(coordinator.completeReplayRecovery()).toBe(true);
+    expect(coordinator.getState().latestSequence).toBe(5);
+    expect(coordinator.getState().highestObservedSequence).toBe(8);
+  });
+
+  it("failSnapshotRecovery clears inFlight without changing bootstrap state", () => {
+    const coordinator = createOrchestrationRecoveryCoordinator();
+
+    coordinator.beginSnapshotRecovery("bootstrap");
+    coordinator.failSnapshotRecovery();
+
+    expect(coordinator.getState()).toMatchObject({
+      bootstrapped: false,
+      inFlight: null,
+    });
+  });
 });

@@ -15,6 +15,16 @@ export interface OrchestrationRecoveryState {
 
 type SequencedEvent = Readonly<{ sequence: number }>;
 
+/**
+ * Orchestration recovery coordinator.
+ *
+ * Manages sequence tracking, gap detection, and snapshot/replay lifecycle for
+ * the WebSocket event stream.  All methods mutate closure-captured state
+ * synchronously — safe because the browser event loop guarantees each caller
+ * runs to completion before the next one starts. The `inFlight` and
+ * `pendingReplay` flags serialize async recovery phases that resume after
+ * `await` boundaries.
+ */
 export function createOrchestrationRecoveryCoordinator() {
   let state: OrchestrationRecoveryState = {
     latestSequence: 0,

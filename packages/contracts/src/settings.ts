@@ -1,4 +1,3 @@
-import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas";
@@ -48,9 +47,9 @@ const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
     Schema.decodeTo(
       Schema.String,
-      SchemaTransformation.transformOrFail({
-        decode: (value) => Effect.succeed(value || fallback),
-        encode: (value) => Effect.succeed(value),
+      SchemaTransformation.transform({
+        decode: (value) => value || fallback,
+        encode: (value) => value,
       }),
     ),
     Schema.withDecodingDefault(() => fallback),
