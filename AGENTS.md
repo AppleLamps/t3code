@@ -3,7 +3,39 @@
 ## Task Completion Requirements
 
 - All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
-- NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- NEVER run `bun test`. Always use `bun run test` (runs Vitest via turbo).
+- Server tests run sequentially (`fileParallelism: false`) with 60s timeouts — full suite takes ~5min.
+
+## Local Development
+
+### macOS / Linux
+
+```bash
+bun install
+bun dev
+```
+
+### Windows
+
+Bun lacks PTY support on Windows. Build and run with Node instead:
+
+```bash
+bun install
+bun run build
+cd apps/server
+node dist/bin.mjs --mode web --port 3773
+```
+
+To rebuild after changes, stop the server, run `bun run build` from the repo root, then restart.
+
+### Quality checks
+
+```bash
+bun fmt          # Format (oxfmt)
+bun lint         # Lint (oxlint)
+bun typecheck    # Type-check (turbo + tsc). TS2 hints from Effect-TS plugin are informational, not errors.
+bun run test     # Run all tests (vitest via turbo)
+```
 
 ## Project Snapshot
 
@@ -26,9 +58,16 @@ Long term maintainability is a core priority. If you add new functionality, firs
 ## Package Roles
 
 - `apps/server`: Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, and manages provider sessions.
-- `apps/web`: React/Vite UI. Owns session UX, conversation/event rendering, and client-side state. Connects to the server via WebSocket.
-- `packages/contracts`: Shared effect/Schema schemas and TypeScript contracts for provider events, WebSocket protocol, and model/session types. Keep this package schema-only — no runtime logic.
-- `packages/shared`: Shared runtime utilities consumed by both server and web. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.
+- `apps/web`: React/Vite UI. Owns session UX, conversation/event rendering, and client-side state. Connects to the server via WebSocket. State is managed via Zustand in `src/store/` (decomposed into appState, mappers, threadUpdaters, eventReducer, actions, selectors, createStore).
+- `packages/contracts`: Shared Effect/Schema schemas and TypeScript contracts for provider events, WebSocket protocol, and model/session types. Keep this package schema-only — no runtime logic. Dependency direction: `shared` depends on `contracts`, NOT the reverse.
+- `packages/shared`: Shared runtime utilities consumed by both server and web. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index. tsconfig has `importFromBarrel: "error"` — cannot use `export *` in index.ts.
+
+## Cross-Platform Notes
+
+- **Windows PTY**: Bun PTY is unavailable on Windows. Use Node.js to run the server.
+- **Git CRLF**: Test repos must set `core.autocrlf=false` to preserve exact content. Windows defaults to true.
+- **chmod**: Setting `0o000` permissions doesn't restrict access on Windows (uses ACLs, not POSIX permissions). Tests relying on chmod for access control should be skipped with `it.effect.skipIf(process.platform === "win32")`.
+- **Path separators**: Use `node:path` functions (`join`, `basename`, `resolve`) for cross-platform path assertions in tests. Never hardcode `/` or `\` in assertions.
 
 ## Codex App Server (Important)
 
