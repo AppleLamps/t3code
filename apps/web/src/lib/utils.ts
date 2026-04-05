@@ -73,3 +73,21 @@ export const resolveServerUrl = (options?: {
   }
   return parsedUrl.toString();
 };
+
+/**
+ * Log a warning for an ignored promise rejection. Use as a `.catch()` handler
+ * on fire-and-forget promises where the failure should be visible in devtools
+ * but should not crash the app.
+ *
+ * @example
+ *   api.orchestration.dispatchCommand(cmd).catch(warnIgnoredError("branch-switch session stop"));
+ */
+export function warnIgnoredError(
+  context: string,
+  extra?: Record<string, unknown>,
+): (error: unknown) => undefined {
+  return (error: unknown) => {
+    console.warn(`[t3code] ${context}:`, error, extra ?? "");
+    return undefined;
+  };
+}

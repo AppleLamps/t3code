@@ -14,6 +14,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { useCallback, useRef } from "react";
 
 import type { WsRpcClient } from "../wsRpcClient";
+import { warnIgnoredError } from "../lib/utils";
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "./atomRegistry";
 
 export type ServerConfigUpdateSource = ServerConfigStreamEvent["type"];
@@ -188,7 +189,7 @@ export function startServerStateSync(client: ServerStateClient): () => void {
         }
         setServerConfigSnapshot(config);
       })
-      .catch(() => undefined);
+      .catch(warnIgnoredError("initial config fetch"));
   }
 
   return () => {

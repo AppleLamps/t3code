@@ -60,7 +60,13 @@ import {
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isLinuxPlatform, isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
+import {
+  isLinuxPlatform,
+  isMacPlatform,
+  newCommandId,
+  newProjectId,
+  warnIgnoredError,
+} from "../lib/utils";
 import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useUiStateStore } from "../uiStateStore";
@@ -912,7 +918,7 @@ export default function Sidebar() {
         });
         await handleNewThread(projectId, {
           envMode: appSettings.defaultThreadEnvMode,
-        }).catch(() => undefined);
+        }).catch(warnIgnoredError("project create: new thread"));
       } catch (error) {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";

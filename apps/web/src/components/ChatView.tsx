@@ -4,7 +4,6 @@ import {
   type ClaudeCodeEffort,
   type MessageId,
   type ModelSelection,
-  type NativeApi,
   type ProjectScript,
   type ProviderKind,
   type ProjectEntry,
@@ -78,7 +77,6 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
-  type SessionPhase,
   type Thread,
   type TurnDiffSummary,
 } from "../types";
@@ -90,7 +88,6 @@ import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
-import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   BotIcon,
   ChevronDownIcon,
@@ -118,7 +115,7 @@ import {
   setupProjectScript,
 } from "~/projectScripts";
 import { SidebarTrigger } from "./ui/sidebar";
-import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newMessageId, newThreadId, warnIgnoredError } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
   getProviderModelCapabilities,
@@ -155,6 +152,7 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { ComponentErrorBoundary } from "./ui/error-boundary";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -180,12 +178,9 @@ import {
   buildTemporaryWorktreeBranchName,
   cloneComposerImageForRetry,
   collectUserMessageBlobPreviewUrls,
-  createLocalDispatchSnapshot,
   deriveComposerSendState,
-  hasServerAcknowledgedLocalDispatch,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
-  type LocalDispatchSnapshot,
   PullRequestDialogState,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
@@ -194,37 +189,16 @@ import {
   threadHasStarted,
   waitForStartedServerThread,
 } from "./ChatView.logic";
+import { useLocalDispatchState } from "./ChatView.useLocalDispatch";
+import PersistentThreadTerminalDrawer, {
+  performTerminalClose,
+} from "./PersistentThreadTerminalDrawer";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import {
   useServerAvailableEditors,
   useServerConfig,
   useServerKeybindings,
 } from "~/rpc/serverState";
-
-/**
- * Perform the terminal close API sequence: clear if final terminal, then close
- * with history deletion. Falls back to writing "exit\n" if close is unavailable.
- */
-function performTerminalClose(
-  api: NativeApi,
-  threadId: string,
-  terminalId: string,
-  isFinalTerminal: boolean,
-): void {
-  const fallbackExitWrite = () =>
-    api.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
-
-  if ("close" in api.terminal && typeof api.terminal.close === "function") {
-    void (async () => {
-      if (isFinalTerminal) {
-        await api.terminal.clear({ threadId, terminalId }).catch(() => undefined);
-      }
-      await api.terminal.close({ threadId, terminalId, deleteHistory: true });
-    })().catch(() => fallbackExitWrite());
-  } else {
-    void fallbackExitWrite();
-  }
-}
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -363,212 +337,6 @@ interface PendingPullRequestSetupRequest {
   threadId: ThreadId;
   worktreePath: string;
   scriptId: string;
-}
-
-function useLocalDispatchState(input: {
-  activeThread: Thread | undefined;
-  activeLatestTurn: Thread["latestTurn"] | null;
-  phase: SessionPhase;
-  activePendingApproval: ApprovalRequestId | null;
-  activePendingUserInput: ApprovalRequestId | null;
-  threadError: string | null | undefined;
-}) {
-  const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
-
-  const beginLocalDispatch = useCallback(
-    (options?: { preparingWorktree?: boolean }) => {
-      const preparingWorktree = Boolean(options?.preparingWorktree);
-      setLocalDispatch((current) => {
-        if (current) {
-          return current.preparingWorktree === preparingWorktree
-            ? current
-            : { ...current, preparingWorktree };
-        }
-        return createLocalDispatchSnapshot(input.activeThread, options);
-      });
-    },
-    [input.activeThread],
-  );
-
-  const resetLocalDispatch = useCallback(() => {
-    setLocalDispatch(null);
-  }, []);
-
-  const serverAcknowledgedLocalDispatch = useMemo(
-    () =>
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: input.phase,
-        latestTurn: input.activeLatestTurn,
-        session: input.activeThread?.session ?? null,
-        hasPendingApproval: input.activePendingApproval !== null,
-        hasPendingUserInput: input.activePendingUserInput !== null,
-        threadError: input.threadError,
-      }),
-    [
-      input.activeLatestTurn,
-      input.activePendingApproval,
-      input.activePendingUserInput,
-      input.activeThread?.session,
-      input.phase,
-      input.threadError,
-      localDispatch,
-    ],
-  );
-
-  useEffect(() => {
-    if (!serverAcknowledgedLocalDispatch) {
-      return;
-    }
-    resetLocalDispatch();
-  }, [resetLocalDispatch, serverAcknowledgedLocalDispatch]);
-
-  return {
-    beginLocalDispatch,
-    resetLocalDispatch,
-    localDispatchStartedAt: localDispatch?.startedAt ?? null,
-    isPreparingWorktree: localDispatch?.preparingWorktree ?? false,
-    isSendBusy: localDispatch !== null && !serverAcknowledgedLocalDispatch,
-  };
-}
-
-interface PersistentThreadTerminalDrawerProps {
-  threadId: ThreadId;
-  visible: boolean;
-  focusRequestId: number;
-  splitShortcutLabel: string | undefined;
-  newShortcutLabel: string | undefined;
-  closeShortcutLabel: string | undefined;
-  onAddTerminalContext: (selection: TerminalContextSelection) => void;
-}
-
-function PersistentThreadTerminalDrawer({
-  threadId,
-  visible,
-  focusRequestId,
-  splitShortcutLabel,
-  newShortcutLabel,
-  closeShortcutLabel,
-  onAddTerminalContext,
-}: PersistentThreadTerminalDrawerProps) {
-  const serverThread = useThreadById(threadId);
-  const draftThread = useComposerDraftStore(
-    (store) => store.draftThreadsByThreadId[threadId] ?? null,
-  );
-  const project = useProjectById(serverThread?.projectId ?? draftThread?.projectId);
-  const terminalState = useTerminalStateStore((state) =>
-    selectThreadTerminalState(state.terminalStateByThreadId, threadId),
-  );
-  const storeSetTerminalHeight = useTerminalStateStore((state) => state.setTerminalHeight);
-  const storeSplitTerminal = useTerminalStateStore((state) => state.splitTerminal);
-  const storeNewTerminal = useTerminalStateStore((state) => state.newTerminal);
-  const storeSetActiveTerminal = useTerminalStateStore((state) => state.setActiveTerminal);
-  const storeCloseTerminal = useTerminalStateStore((state) => state.closeTerminal);
-  const [localFocusRequestId, setLocalFocusRequestId] = useState(0);
-  const worktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
-  const cwd = useMemo(
-    () =>
-      project
-        ? projectScriptCwd({
-            project: { cwd: project.cwd },
-            worktreePath,
-          })
-        : null,
-    [project, worktreePath],
-  );
-  const runtimeEnv = useMemo(
-    () =>
-      project
-        ? projectScriptRuntimeEnv({
-            project: { cwd: project.cwd },
-            worktreePath,
-          })
-        : {},
-    [project, worktreePath],
-  );
-
-  const bumpFocusRequestId = useCallback(() => {
-    if (!visible) {
-      return;
-    }
-    setLocalFocusRequestId((value) => value + 1);
-  }, [visible]);
-
-  const setTerminalHeight = useCallback(
-    (height: number) => {
-      storeSetTerminalHeight(threadId, height);
-    },
-    [storeSetTerminalHeight, threadId],
-  );
-
-  const splitTerminal = useCallback(() => {
-    storeSplitTerminal(threadId, `terminal-${randomUUID()}`);
-    bumpFocusRequestId();
-  }, [bumpFocusRequestId, storeSplitTerminal, threadId]);
-
-  const createNewTerminal = useCallback(() => {
-    storeNewTerminal(threadId, `terminal-${randomUUID()}`);
-    bumpFocusRequestId();
-  }, [bumpFocusRequestId, storeNewTerminal, threadId]);
-
-  const activateTerminal = useCallback(
-    (terminalId: string) => {
-      storeSetActiveTerminal(threadId, terminalId);
-      bumpFocusRequestId();
-    },
-    [bumpFocusRequestId, storeSetActiveTerminal, threadId],
-  );
-
-  const closeTerminal = useCallback(
-    (terminalId: string) => {
-      const api = readNativeApi();
-      if (!api) return;
-      performTerminalClose(api, threadId, terminalId, terminalState.terminalIds.length <= 1);
-      storeCloseTerminal(threadId, terminalId);
-      bumpFocusRequestId();
-    },
-    [bumpFocusRequestId, storeCloseTerminal, terminalState.terminalIds.length, threadId],
-  );
-
-  const handleAddTerminalContext = useCallback(
-    (selection: TerminalContextSelection) => {
-      if (!visible) {
-        return;
-      }
-      onAddTerminalContext(selection);
-    },
-    [onAddTerminalContext, visible],
-  );
-
-  if (!project || !terminalState.terminalOpen || !cwd) {
-    return null;
-  }
-
-  return (
-    <div className={visible ? undefined : "hidden"}>
-      <ThreadTerminalDrawer
-        threadId={threadId}
-        cwd={cwd}
-        runtimeEnv={runtimeEnv}
-        visible={visible}
-        height={terminalState.terminalHeight}
-        terminalIds={terminalState.terminalIds}
-        activeTerminalId={terminalState.activeTerminalId}
-        terminalGroups={terminalState.terminalGroups}
-        activeTerminalGroupId={terminalState.activeTerminalGroupId}
-        focusRequestId={focusRequestId + localFocusRequestId + (visible ? 1 : 0)}
-        onSplitTerminal={splitTerminal}
-        onNewTerminal={createNewTerminal}
-        splitShortcutLabel={visible ? splitShortcutLabel : undefined}
-        newShortcutLabel={visible ? newShortcutLabel : undefined}
-        closeShortcutLabel={visible ? closeShortcutLabel : undefined}
-        onActiveTerminalChange={activateTerminal}
-        onCloseTerminal={closeTerminal}
-        onHeightChange={setTerminalHeight}
-        onAddTerminalContext={handleAddTerminalContext}
-      />
-    </div>
-  );
 }
 
 export default function ChatView({ threadId }: ChatViewProps) {
@@ -3080,7 +2848,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
             commandId: newCommandId(),
             threadId: threadIdForSend,
           })
-          .catch(() => undefined);
+          .catch(
+            warnIgnoredError("send: compensating thread delete", { threadId: threadIdForSend }),
+          );
       }
       if (
         !turnStartSucceeded &&
@@ -3492,7 +3262,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
             commandId: newCommandId(),
             threadId: nextThreadId,
           })
-          .catch(() => undefined);
+          .catch(
+            warnIgnoredError("implement plan: compensating thread delete", {
+              threadId: nextThreadId,
+            }),
+          );
         toastManager.add({
           type: "error",
           title: "Could not start implementation thread",
@@ -3970,30 +3744,44 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onTouchEnd={onMessagesTouchEnd}
               onTouchCancel={onMessagesTouchEnd}
             >
-              <MessagesTimeline
-                key={activeThread.id}
-                hasMessages={timelineEntries.length > 0}
-                isWorking={isWorking}
-                activeTurnInProgress={isWorking || !latestTurnSettled}
-                activeTurnStartedAt={activeWorkStartedAt}
-                scrollContainer={messagesScrollElement}
-                timelineEntries={timelineEntries}
-                completionDividerBeforeEntryId={completionDividerBeforeEntryId}
-                completionSummary={completionSummary}
-                turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                nowIso={nowIso}
-                expandedWorkGroups={expandedWorkGroups}
-                onToggleWorkGroup={onToggleWorkGroup}
-                onOpenTurnDiff={onOpenTurnDiff}
-                revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-                onRevertUserMessage={onRevertUserMessage}
-                isRevertingCheckpoint={isRevertingCheckpoint}
-                onImageExpand={onExpandTimelineImage}
-                markdownCwd={gitCwd ?? undefined}
-                resolvedTheme={resolvedTheme}
-                timestampFormat={timestampFormat}
-                workspaceRoot={activeProject?.cwd ?? undefined}
-              />
+              <ComponentErrorBoundary
+                context="MessagesTimeline"
+                fallback={(error, reset) => (
+                  <div className="flex flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
+                    <CircleAlertIcon className="size-6 text-destructive" />
+                    <p className="text-sm">Failed to render messages</p>
+                    <p className="max-w-md text-xs">{error.message}</p>
+                    <Button size="sm" variant="outline" onClick={reset}>
+                      Retry
+                    </Button>
+                  </div>
+                )}
+              >
+                <MessagesTimeline
+                  key={activeThread.id}
+                  hasMessages={timelineEntries.length > 0}
+                  isWorking={isWorking}
+                  activeTurnInProgress={isWorking || !latestTurnSettled}
+                  activeTurnStartedAt={activeWorkStartedAt}
+                  scrollContainer={messagesScrollElement}
+                  timelineEntries={timelineEntries}
+                  completionDividerBeforeEntryId={completionDividerBeforeEntryId}
+                  completionSummary={completionSummary}
+                  turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                  nowIso={nowIso}
+                  expandedWorkGroups={expandedWorkGroups}
+                  onToggleWorkGroup={onToggleWorkGroup}
+                  onOpenTurnDiff={onOpenTurnDiff}
+                  revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                  onRevertUserMessage={onRevertUserMessage}
+                  isRevertingCheckpoint={isRevertingCheckpoint}
+                  onImageExpand={onExpandTimelineImage}
+                  markdownCwd={gitCwd ?? undefined}
+                  resolvedTheme={resolvedTheme}
+                  timestampFormat={timestampFormat}
+                  workspaceRoot={activeProject?.cwd ?? undefined}
+                />
+              </ComponentErrorBoundary>
             </div>
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}

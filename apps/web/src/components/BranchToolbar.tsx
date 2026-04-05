@@ -2,7 +2,7 @@ import type { ThreadId } from "@t3tools/contracts";
 import { FolderIcon, GitForkIcon } from "lucide-react";
 import { useCallback } from "react";
 
-import { newCommandId } from "../lib/utils";
+import { newCommandId, warnIgnoredError } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
@@ -68,7 +68,7 @@ export default function BranchToolbar({
             threadId: activeThreadId,
             createdAt: new Date().toISOString(),
           })
-          .catch(() => undefined);
+          .catch(warnIgnoredError("branch-switch session stop", { threadId: activeThreadId }));
       }
       if (api && hasServerThread) {
         void api.orchestration.dispatchCommand({

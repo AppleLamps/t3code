@@ -20,6 +20,7 @@ import {
   gitStatusQueryOptions,
   invalidateGitQueries,
 } from "../lib/gitReactQuery";
+import { warnIgnoredError } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { parsePullRequestReference } from "../pullRequestReference";
 import {
@@ -187,8 +188,8 @@ export function BranchToolbarBranchSelector({
 
   const runBranchAction = (action: () => Promise<void>) => {
     startBranchActionTransition(async () => {
-      await action().catch(() => undefined);
-      await invalidateGitQueries(queryClient).catch(() => undefined);
+      await action().catch(warnIgnoredError("branch action"));
+      await invalidateGitQueries(queryClient).catch(warnIgnoredError("git query invalidation"));
     });
   };
 

@@ -20,6 +20,7 @@ import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { readNativeApi } from "../nativeApi";
+import { warnIgnoredError } from "../lib/utils";
 import {
   getServerConfigUpdatedNotification,
   ServerConfigUpdatedNotification,
@@ -219,7 +220,7 @@ function EventRouter() {
   const handleWelcome = useEffectEvent((payload: ServerLifecycleWelcomePayload | null) => {
     if (!payload) return;
 
-    migrateLocalSettingsToServer();
+    void migrateLocalSettingsToServer();
     void (async () => {
       await bootstrapFromSnapshotRef.current();
       if (disposedRef.current) {
@@ -243,7 +244,7 @@ function EventRouter() {
         replace: true,
       });
       handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
-    })().catch(() => undefined);
+    })().catch(warnIgnoredError("bootstrap navigation"));
   });
 
   const handleServerConfigUpdated = useEffectEvent(

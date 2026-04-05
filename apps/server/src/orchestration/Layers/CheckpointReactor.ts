@@ -63,6 +63,14 @@ function checkpointStatusFromRuntime(status: string | undefined): "ready" | "mis
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
+/** Log a warning when a fallback/error-reporting effect fails, then swallow so the reactor never crashes from logging. */
+const logAndSwallow = (context: string) =>
+  Effect.catch((error: unknown) =>
+    Effect.logWarning(`CheckpointReactor: ${context} failed`, { error }).pipe(
+      Effect.catch(() => Effect.void),
+    ),
+  );
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
@@ -572,7 +580,7 @@ const make = Effect.gen(function* () {
         turnCount: event.payload.turnCount,
         detail: "Thread was not found in read model.",
         createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(logAndSwallow("appendRevertFailureActivity"));
       return;
     }
 
@@ -583,7 +591,7 @@ const make = Effect.gen(function* () {
         turnCount: event.payload.turnCount,
         detail: "No active provider session with workspace cwd is bound to this thread.",
         createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(logAndSwallow("appendRevertFailureActivity"));
       return;
     }
     if (!isGitWorkspace(sessionRuntime.value.cwd)) {
@@ -592,7 +600,7 @@ const make = Effect.gen(function* () {
         turnCount: event.payload.turnCount,
         detail: "Checkpoints are unavailable because this project is not a git repository.",
         createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(logAndSwallow("appendRevertFailureActivity"));
       return;
     }
 
@@ -607,7 +615,7 @@ const make = Effect.gen(function* () {
         turnCount: event.payload.turnCount,
         detail: `Checkpoint turn count ${event.payload.turnCount} exceeds current turn count ${currentTurnCount}.`,
         createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(logAndSwallow("appendRevertFailureActivity"));
       return;
     }
 
@@ -624,7 +632,7 @@ const make = Effect.gen(function* () {
         turnCount: event.payload.turnCount,
         detail: `Checkpoint ref for turn ${event.payload.turnCount} is unavailable in read model.`,
         createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(logAndSwallow("appendRevertFailureActivity"));
       return;
     }
 
@@ -639,7 +647,7 @@ const make = Effect.gen(function* () {
         turnCount: event.payload.turnCount,
         detail: `Filesystem checkpoint is unavailable for turn ${event.payload.turnCount}.`,
         createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
+      }).pipe(logAndSwallow("appendRevertFailureActivity"));
       return;
     }
 
@@ -720,7 +728,7 @@ const make = Effect.gen(function* () {
             turnId: event.payload.turnId,
             detail: error.message,
             createdAt: new Date().toISOString(),
-          }).pipe(Effect.catch(() => Effect.void)),
+          }).pipe(logAndSwallow("appendCaptureFailureActivity")),
         ),
       );
     }
@@ -743,7 +751,7 @@ const make = Effect.gen(function* () {
             turnId,
             detail: error.message,
             createdAt: new Date().toISOString(),
-          }).pipe(Effect.catch(() => Effect.void)),
+          }).pipe(logAndSwallow("appendCaptureFailureActivity")),
         ),
       );
       return;

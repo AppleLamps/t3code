@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import ThreadSidebar from "./Sidebar";
+import { ComponentErrorBoundary } from "./ui/error-boundary";
 import { Sidebar, SidebarProvider, SidebarRail } from "./ui/sidebar";
 
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -40,7 +41,18 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        <ThreadSidebar />
+        <ComponentErrorBoundary
+          context="Sidebar"
+          fallback={
+            <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">
+              Sidebar failed to render.
+              <br />
+              Reload the app to recover.
+            </div>
+          }
+        >
+          <ThreadSidebar />
+        </ComponentErrorBoundary>
         <SidebarRail />
       </Sidebar>
       {children}

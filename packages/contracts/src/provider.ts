@@ -38,6 +38,11 @@ export const ProviderSession = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   model: Schema.optional(TrimmedNonEmptyString),
   threadId: ThreadId,
+  /**
+   * Opaque provider-specific cursor for resuming a session.
+   * Claude: `{ resume?: string; resumeSessionAt?: string; turnCount?: number }`
+   * Codex: opaque event payload from the last turn.
+   */
   resumeCursor: Schema.optional(Schema.Unknown),
   activeTurnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
@@ -51,6 +56,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   provider: Schema.optional(ProviderKind),
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
+  /** @see ProviderSession.resumeCursor */
   resumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
@@ -74,6 +80,7 @@ export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 export const ProviderTurnStartResult = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
+  /** @see ProviderSession.resumeCursor */
   resumeCursor: Schema.optional(Schema.Unknown),
 });
 export type ProviderTurnStartResult = typeof ProviderTurnStartResult.Type;
@@ -118,6 +125,7 @@ export const ProviderEvent = Schema.Struct({
   requestId: Schema.optional(ApprovalRequestId),
   requestKind: Schema.optional(ProviderRequestKind),
   textDelta: Schema.optional(Schema.String),
+  /** Event-specific detail. Shape depends on `kind`/`method` (e.g. tool call args, file diff, usage stats). */
   payload: Schema.optional(Schema.Unknown),
 });
 export type ProviderEvent = typeof ProviderEvent.Type;

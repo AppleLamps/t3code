@@ -27,6 +27,11 @@ const RuntimeEventRawSource = Schema.Literals([
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;
 
+/**
+ * Raw event from a provider runtime (Codex JSON-RPC or Claude SDK).
+ * The `payload` is intentionally untyped — each provider emits different
+ * event structures (tool calls, file diffs, token usage, etc.).
+ */
 export const RuntimeEventRaw = Schema.Struct({
   source: RuntimeEventRawSource,
   method: Schema.optional(TrimmedNonEmptyStringSchema),

@@ -75,6 +75,11 @@ export const ProviderApprovalDecision = Schema.Literals([
   "cancel",
 ]);
 export type ProviderApprovalDecision = typeof ProviderApprovalDecision.Type;
+/**
+ * User-provided answers for a provider approval prompt.
+ * At runtime, values are typically `string` or `string[]` (multi-select).
+ * Kept as `Unknown` to allow providers to extend the answer format.
+ */
 export const ProviderUserInputAnswers = Schema.Record(Schema.String, Schema.Unknown);
 export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 
@@ -240,6 +245,7 @@ export const OrchestrationThreadActivity = Schema.Struct({
   tone: OrchestrationThreadActivityTone,
   kind: TrimmedNonEmptyString,
   summary: TrimmedNonEmptyString,
+  /** Activity-specific detail. Shape depends on `kind` (e.g. checkpoint failure detail, error context). */
   payload: Schema.Unknown,
   turnId: Schema.NullOr(TurnId),
   sequence: Schema.optional(NonNegativeInt),

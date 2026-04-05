@@ -7,7 +7,7 @@ import { getFallbackThreadIdAfterDelete } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "./useHandleNewThread";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
-import { newCommandId } from "../lib/utils";
+import { newCommandId, warnIgnoredError } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -101,7 +101,7 @@ export function useThreadActions() {
             threadId,
             createdAt: new Date().toISOString(),
           })
-          .catch(() => undefined);
+          .catch(warnIgnoredError("thread delete: session stop", { threadId }));
       }
 
       try {

@@ -259,7 +259,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   status: "rejected",
                   error: error.message,
                 })
-                .pipe(Effect.catch(() => Effect.void));
+                .pipe(
+                  Effect.catch((receiptError) =>
+                    Effect.logWarning(
+                      "OrchestrationEngine: failed to persist rejected command receipt",
+                      {
+                        commandId: envelope.command.commandId,
+                        error: receiptError,
+                      },
+                    ).pipe(Effect.catch(() => Effect.void)),
+                  ),
+                );
             }
           }
 

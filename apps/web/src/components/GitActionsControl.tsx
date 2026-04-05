@@ -48,7 +48,7 @@ import {
   gitStatusQueryOptions,
   invalidateGitStatusQuery,
 } from "~/lib/gitReactQuery";
-import { newCommandId, randomUUID } from "~/lib/utils";
+import { newCommandId, randomUUID, warnIgnoredError } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
@@ -255,7 +255,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
             branch,
             worktreePath,
           })
-          .catch(() => undefined);
+          .catch(warnIgnoredError("git action: thread meta update", { threadId: activeThreadId }));
       }
 
       setThreadBranch(activeThreadId, branch, worktreePath);
